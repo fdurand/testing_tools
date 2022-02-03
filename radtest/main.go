@@ -24,42 +24,6 @@ const usage = `
 Sends an Accounting RADIUS packet to a server and prints the result.
 `
 
-// User-Name = "fee698e04aa8"
-// NAS-IP-Address = 172.31.0.161
-// NAS-Port = 419
-// Framed-IP-Address = 172.16.34.229
-// Called-Station-Id = "3c-13-cc-93-65-0b"
-// Calling-Station-Id = "fe-e6-98-e0-4a-a8"
-// NAS-Identifier = "Samford_IOT"
-// NAS-Port-Type = Wireless-802.11
-// Acct-Status-Type = Interim-Update
-// Acct-Delay-Time = 3
-// Acct-Input-Octets = 6635999
-// Acct-Output-Octets = 52240584
-// Acct-Session-Id = "00023c0c"
-// Acct-Authentic = Remote
-// Acct-Input-Packets = 20921
-// Acct-Output-Packets = 53852
-// Acct-Input-Gigawords = 0
-// Acct-Output-Gigawords = 0
-// Event-Timestamp = "Feb  1 2022 14:59:04 CST"
-// NAS-Port-Id = "capwap_918002b8"
-// Framed-IPv6-Address = fe80::9a:334b:d7ff:863e
-// Airespace-Wlan-Id = 4
-// Cisco-AVPair = "dc-profile-name=Un-Classified Device"
-// Cisco-AVPair = "dc-device-name=Unknown Device"
-// Cisco-AVPair = "dc-device-class-tag=Un-Classified Device"
-// Cisco-AVPair = "dc-certainty-metric=0"
-// Cisco-AVPair = "dc-opaque=\004\000\000\000\000\000\000\000\000\000\000"
-// Cisco-AVPair = "dc-protocol-map=9"
-// Cisco-AVPair = "dhcp-option=\0007\000\t\001y\003\006\017lrw\374"
-// Cisco-AVPair = "audit-session-id=A1001FAC00066A46B6A05B36"
-// Cisco-AVPair = "vlan-id=25"
-// Cisco-AVPair = "method=mab"
-// Cisco-AVPair = "cisco-wlan-ssid=Samford_IOT"
-// Cisco-AVPair = "wlan-profile-name=Samford_IOT"
-// Authenticator-Field = 0x4648796b711832eeb1eaab6e83f64ce2
-
 type Schedule func(*client)
 
 type client struct {
