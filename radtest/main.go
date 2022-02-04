@@ -65,6 +65,7 @@ type config struct {
 	timeout       *time.Duration
 	randomize     *bool
 	stopthreshold *int
+	uniquemac     *bool
 }
 
 func main() {
@@ -80,8 +81,10 @@ func main() {
 	configuration.timeout = flag.Duration("timeout", time.Second*10, "timeout for the request to finish")
 	configuration.randomize = flag.Bool("random", true, "Randomize the accounting traffic")
 	configuration.stopthreshold = flag.Int("threshold", 10, "Pourcent to send accounting stop on session")
+	configuration.uniquemac = flag.Bool("unique", false, "Use the same mac address for the test")
 	flag.Parse()
 
+	spew.Dump(configuration)
 	if *configuration.stopthreshold > 100 {
 		fmt.Println("\r- threshold can´t be greater to 100")
 		os.Exit(0)
@@ -90,7 +93,11 @@ func main() {
 	clientsMac := &clients{}
 	for j := 1; j <= *configuration.nbclient; j++ {
 		clientMac := &client{}
-		clientMac.CallingStationId = GenerateMac().String()
+		if *configuration.uniquemac {
+			clientMac.CallingStationId = "00:11:22:33:44:55"
+		} else {
+			clientMac.CallingStationId = GenerateMac().String()
+		}
 		clientMac.CalledStationId = GenerateMac().String() + ":" + RandStringRunes(5)
 		clientMac.UserName = clientMac.CallingStationId
 		clientMac.NASPortId = *configuration.nasport
@@ -215,6 +222,7 @@ func SetupCloseHandler(configuration *config, clientsMac *clients) {
 		for _, v := range clientsMac.client {
 			v.AcctStatusType = rfc2866.AcctStatusType_Value_Stop
 			task(configuration, v)
+			fmt.Println("\r Stop for " + v.CallingStationId)
 		}
 		fmt.Println("\r- Ctrl+C pressed in Terminal")
 		os.Exit(0)
