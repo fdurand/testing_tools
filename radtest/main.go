@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,28 +29,33 @@ Sends an Accounting RADIUS packet to a server and prints the result.
 type Schedule func(*client)
 
 type client struct {
-	UserName            string
-	NASIPAddress        string
-	NASPort             string
-	FramedIPAddress     string
-	CalledStationId     string
-	CallingStationId    string
-	NASIdentifier       string
-	NASPortType         string
-	AcctStatusType      rfc2866.AcctStatusType
-	AcctDelayTime       string
-	AcctInputOctets     int
-	AcctOutputOctets    int
-	AcctSessionId       string
-	AcctAuthentic       string
-	AcctInputPackets    int
-	AcctOutputPackets   int
-	AcctInputGigawords  int
-	AcctOutputGigawords int
-	AcctSessionTime     int
-	EventTimestamp      time.Time
-	NASPortId           string
-	Start               Schedule
+	UserName                 string
+	NASIPAddress             string
+	NASPort                  string
+	FramedIPAddress          string
+	CalledStationId          string
+	CallingStationId         string
+	NASIdentifier            string
+	NASPortType              string
+	AcctStatusType           rfc2866.AcctStatusType
+	AcctDelayTime            string
+	AcctInputOctets          int
+	AcctOutputOctets         int
+	AcctSessionId            string
+	AcctAuthentic            string
+	AcctInputPackets         int
+	AcctOutputPackets        int
+	AcctInputGigawords       int
+	AcctOutputGigawords      int
+	AcctSessionTime          int
+	EventTimestamp           time.Time
+	NASPortId                string
+	Start                    Schedule
+	ForceStop                bool
+	PreviousAcctInputOctets  int
+	PreviousAcctOutputOctets int
+	PreviousAcctSessionTime  int
+	PreviousAcctSessionId    string
 }
 
 type clients struct {
@@ -56,19 +63,24 @@ type clients struct {
 }
 
 type config struct {
-	host          *string
-	port          *string
-	secret        *string
-	nbclient      *int
-	interim       *int
-	nasport       *string
-	timeout       *time.Duration
-	randomize     *bool
-	stopthreshold *int
-	uniquemac     *bool
+	host              *string
+	port              *string
+	secret            *string
+	nbclient          *int
+	interim           *int
+	nasport           *string
+	timeout           *time.Duration
+	randomize         *bool
+	stopthreshold     *int
+	uniquemac         *bool
+	spread            *bool
+	start_before_stop *bool
 }
 
 func main() {
+
+	logger := GetInstance()
+	logger.Println("Starting")
 
 	configuration := &config{}
 
@@ -80,15 +92,18 @@ func main() {
 	configuration.nasport = flag.String("nasport", "1500", "Nas Port")
 	configuration.timeout = flag.Duration("timeout", time.Second*10, "timeout for the request to finish")
 	configuration.randomize = flag.Bool("random", true, "Randomize the accounting traffic")
-	configuration.stopthreshold = flag.Int("threshold", 10, "Pourcent to send accounting stop on session")
+	configuration.stopthreshold = flag.Int("threshold", 2, "Pourcent to send accounting stop on session")
 	configuration.uniquemac = flag.Bool("unique", false, "Use the same mac address for the test")
+	configuration.spread = flag.Bool("spread", true, "spread packet across interim")
+	configuration.start_before_stop = flag.Bool("startstop", false, "Send start before stop")
 	flag.Parse()
 
-	spew.Dump(configuration)
 	if *configuration.stopthreshold > 100 {
 		fmt.Println("\r- threshold can´t be greater to 100")
 		os.Exit(0)
 	}
+
+	logger.Println(strings.Join(flag.CommandLine.Args(), " "))
 
 	clientsMac := &clients{}
 	for j := 1; j <= *configuration.nbclient; j++ {
@@ -105,6 +120,7 @@ func main() {
 		clientMac.AcctOutputOctets = 0
 		clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_Start
 		clientMac.AcctSessionId = uuid.New().String()
+		clientMac.ForceStop = false
 		clientMac.Start = func(clientMac *client) {
 			go func(clientMac *client) {
 				s := gocron.NewScheduler()
@@ -123,8 +139,12 @@ func main() {
 		rand.Seed(time.Now().UnixNano())
 		for _, v := range clientsMac.client {
 			v.Start(v)
-			n := rand.Intn(*configuration.interim)
-			time.Sleep(time.Duration(n) * time.Millisecond)
+			if *configuration.spread {
+				time.Sleep(time.Duration(( *configuration.interim * 1000 ) / *configuration.nbclient) * time.Millisecond)
+			} else {
+				n := rand.Intn(*configuration.interim)
+				time.Sleep(time.Duration(n) * time.Millisecond)
+			}
 		}
 	}()
 
@@ -139,7 +159,9 @@ func hello() {
 }
 
 func task(configuration *config, clientMac *client) {
-	spew.Dump(clientMac.CallingStationId)
+	logger := GetInstance()
+	logger.Println(clientMac.AcctStatusType.String() + " " + clientMac.CallingStationId)
+
 	hostport := net.JoinHostPort(*configuration.host, *configuration.port)
 
 	packet := radius.New(radius.CodeAccountingRequest, []byte(*configuration.secret))
@@ -167,21 +189,79 @@ func task(configuration *config, clientMac *client) {
 		status += " (" + msg + ")"
 	}
 
-	fmt.Println(status)
+	fmt.Println(clientMac.CallingStationId + " : " + clientMac.AcctStatusType.String() + " : " + status)
 	rand.Seed(time.Now().UnixNano())
+
+	// We already send the start & stop. Send a Interim
+	if clientMac.ForceStop && clientMac.AcctStatusType == rfc2866.AcctStatusType_Value_Stop {
+		clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_InterimUpdate
+		o := rand.Intn(*configuration.interim * 100)
+		i := rand.Intn(*configuration.interim * 100)
+		clientMac.AcctInputOctets = clientMac.AcctInputOctets + i
+		clientMac.AcctOutputOctets = clientMac.AcctOutputOctets + o
+		clientMac.AcctSessionTime = clientMac.AcctSessionTime + *configuration.interim
+		clientMac.AcctSessionId = clientMac.PreviousAcctSessionId
+		clientMac.ForceStop = false
+	}
+
+	// Force accounting stop
+	if clientMac.ForceStop {
+		clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_Stop
+		o := rand.Intn(*configuration.interim * 100)
+		i := rand.Intn(*configuration.interim * 100)
+		clientMac.AcctInputOctets = clientMac.PreviousAcctInputOctets + i
+		clientMac.AcctOutputOctets = clientMac.PreviousAcctOutputOctets + o
+		clientMac.AcctSessionTime = clientMac.PreviousAcctSessionTime + *configuration.interim
+		// Save the start session id
+		previousAcctSessionId := clientMac.AcctSessionId
+		clientMac.AcctSessionId = clientMac.PreviousAcctSessionId
+		clientMac.PreviousAcctSessionId = previousAcctSessionId
+		clientMac.PreviousAcctInputOctets = 0
+		clientMac.PreviousAcctOutputOctets = 0
+		clientMac.PreviousAcctSessionTime = 0
+		return
+	}
+
 	if clientMac.AcctStatusType == rfc2866.AcctStatusType_Value_Start || clientMac.AcctStatusType == rfc2866.AcctStatusType_Value_InterimUpdate {
 		n := rand.Intn(100)
-		if (n < 100-*configuration.stopthreshold) && *configuration.randomize {
-			clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_InterimUpdate
-			o := rand.Intn(*configuration.interim * 10)
-			i := rand.Intn(*configuration.interim * 10)
-			clientMac.AcctInputOctets = clientMac.AcctInputOctets + i
-			clientMac.AcctOutputOctets = clientMac.AcctOutputOctets + o
-			clientMac.AcctSessionTime = clientMac.AcctSessionTime + *configuration.interim
+		if *configuration.randomize {
+			if n < 100-*configuration.stopthreshold {
+				clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_InterimUpdate
+				o := rand.Intn(*configuration.interim * 100)
+				i := rand.Intn(*configuration.interim * 100)
+				clientMac.AcctInputOctets = clientMac.AcctInputOctets + i
+				clientMac.AcctOutputOctets = clientMac.AcctOutputOctets + o
+				clientMac.AcctSessionTime = clientMac.AcctSessionTime + *configuration.interim
+			} else {
+				if *configuration.start_before_stop {
+					clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_Start
+					clientMac.PreviousAcctInputOctets = clientMac.AcctInputOctets
+					clientMac.PreviousAcctOutputOctets = clientMac.AcctOutputOctets
+					clientMac.PreviousAcctSessionTime = clientMac.AcctSessionTime
+					clientMac.PreviousAcctSessionId = clientMac.AcctSessionId
+					clientMac.AcctSessionId = uuid.New().String() + ":" + RandStringRunes(5)
+					clientMac.AcctInputOctets = 0
+					clientMac.AcctOutputOctets = 0
+					clientMac.AcctSessionTime = 0
+					clientMac.ForceStop = true
+					// Wait a bit before sending the start
+					n := rand.Intn(*configuration.interim)
+					time.Sleep(time.Duration(n) * time.Second)
+					// Send the start
+					task(configuration, clientMac)
+					return
+				}
+				clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_Stop
+				o := rand.Intn(*configuration.interim * 100)
+				i := rand.Intn(*configuration.interim * 100)
+				clientMac.AcctInputOctets = clientMac.AcctInputOctets + i
+				clientMac.AcctOutputOctets = clientMac.AcctOutputOctets + o
+				clientMac.AcctSessionTime = clientMac.AcctSessionTime + *configuration.interim
+			}
 		} else {
-			clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_Stop
-			o := rand.Intn(*configuration.interim * 10)
-			i := rand.Intn(*configuration.interim * 10)
+			clientMac.AcctStatusType = rfc2866.AcctStatusType_Value_InterimUpdate
+			o := rand.Intn(*configuration.interim * 100)
+			i := rand.Intn(*configuration.interim * 100)
 			clientMac.AcctInputOctets = clientMac.AcctInputOctets + i
 			clientMac.AcctOutputOctets = clientMac.AcctOutputOctets + o
 			clientMac.AcctSessionTime = clientMac.AcctSessionTime + *configuration.interim
@@ -219,10 +299,14 @@ func SetupCloseHandler(configuration *config, clientsMac *clients) {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func(configuration *config, clientMac *clients) {
 		<-c
+		file, _ := os.OpenFile("logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+		defer file.Close()
 		for _, v := range clientsMac.client {
 			v.AcctStatusType = rfc2866.AcctStatusType_Value_Stop
 			task(configuration, v)
 			fmt.Println("\r Stop for " + v.CallingStationId)
+			log.SetOutput(file)
+			log.Println("Stop for " + v.CallingStationId)
 		}
 		fmt.Println("\r- Ctrl+C pressed in Terminal")
 		os.Exit(0)
@@ -239,3 +323,4 @@ func RandStringRunes(n int) string {
 	}
 	return string(b)
 }
+
